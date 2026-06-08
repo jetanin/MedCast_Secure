@@ -4,10 +4,12 @@
 // - /seed/models/global_weights.csv
 const fs = require("fs");
 const path = require("path");
+const bcrypt = require("bcryptjs");
 const { parse } = require("csv-parse/sync");
 const { pool } = require("./db");
 
 const SEED_DIR = process.env.SEED_DIR || "/seed";
+const DEFAULT_PASSWORD = process.env.DEFAULT_PASSWORD || "medcast123";
 
 function readCsv(relPath) {
   const full = path.join(SEED_DIR, relPath);
@@ -31,7 +33,27 @@ async function ensureSchema() {
       ratio DOUBLE PRECISION, status TEXT, confidence DOUBLE PRECISION,
       UNIQUE (hospital_id, drug));
     CREATE TABLE IF NOT EXISTS weights (feature TEXT PRIMARY KEY, weight DOUBLE PRECISION);
+    CREATE TABLE IF NOT EXISTS users (
+      id SERIAL PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL,
+      hospital_id TEXT, created_at TIMESTAMPTZ DEFAULT now());
+    CREATE TABLE IF NOT EXISTS borrow_requests (
+      id SERIAL PRIMARY KEY, from_hospital TEXT, to_hospital TEXT, drug TEXT NOT NULL,
+      quantity DOUBLE PRECISION NOT NULL, reason TEXT,
+      status TEXT NOT NULL DEFAULT 'pending', created_at TIMESTAMPTZ DEFAULT now());
   `);
+}
+
+async function seedUsers(hospitals) {
+  const hash = bcrypt.hashSync(DEFAULT_PASSWORD, 10);
+  for (const h of hospitals) {
+    // username = hospital_id, รหัสผ่านเริ่มต้น = DEFAULT_PASSWORD
+    await pool.query(
+      `INSERT INTO users (username, password_hash, hospital_id)
+       VALUES ($1, $2, $3) ON CONFLICT (username) DO NOTHING`,
+      [h.hospital_id, hash, h.hospital_id]
+    );
+  }
+  console.log(`[seed] users: ${hospitals.length} (password ตั้งต้น = "${DEFAULT_PASSWORD}")`);
 }
 
 async function seed() {
@@ -50,6 +72,7 @@ async function seed() {
     );
   }
   console.log(`[seed] hospitals: ${hospitals.length}`);
+  await seedUsers(hospitals);
 
   const forecasts = readCsv("data/predictions/forecast_snapshot.csv");
   for (const f of forecasts) {

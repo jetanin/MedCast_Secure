@@ -47,3 +47,26 @@ select { background: #0f172a; color: var(--text); border: 1px solid #334155;
 .flow { background: #0f172a; padding: 14px; border-radius: 8px; white-space: pre;
         font-family: monospace; font-size: 0.82rem; color: var(--muted); overflow-x: auto; }
 .muted { color: var(--muted); }
+
+/* login */
+.login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.login-card { width: 360px; display: flex; flex-direction: column; gap: 8px; }
+.login-card input { background: #0f172a; color: var(--text); border: 1px solid #334155;
+                    border-radius: 8px; padding: 10px; font-size: 0.95rem; }
+.login-card button { margin-top: 8px; }
+
+/* topbar */
+.topbar { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.user-box { display: flex; align-items: center; gap: 10px; }
+
+/* forms inside panels */
+.panel form { display: flex; flex-direction: column; gap: 6px; }
+.panel form input { background: #0f172a; color: var(--text); border: 1px solid #334155;
+                    border-radius: 8px; padding: 8px; font-size: 0.92rem; }
+.panel form button { margin-top: 10px; }
+
+/* mini action buttons */
+.mini { border: none; border-radius: 6px; padding: 4px 10px; margin-right: 4px;
+        cursor: pointer; font-size: 0.8rem; color: #0f172a; font-weight: 600; }
+.mini.ok { background: var(--green); }
+.mini.no { background: var(--red); }

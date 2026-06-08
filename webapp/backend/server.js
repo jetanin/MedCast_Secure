@@ -1,7 +1,9 @@
 const express = require("express");
 const cors = require("cors");
+const bcrypt = require("bcryptjs");
 const { pool, waitForDb } = require("./db");
 const { seed } = require("./seed");
+const { signToken, requireAuth } = require("./auth");
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -92,6 +94,103 @@ app.get("/api/weights", async (_req, res, next) => {
   try {
     const { rows } = await pool.query("SELECT feature, weight FROM weights ORDER BY ABS(weight) DESC");
     res.json(rows);
+  } catch (e) { next(e); }
+});
+
+// ---------- AUTH ----------
+// เข้าสู่ระบบ: { username, password } -> token
+app.post("/api/login", async (req, res, next) => {
+  try {
+    const { username, password } = req.body || {};
+    if (!username || !password) return res.status(400).json({ error: "กรอก username/password" });
+    const { rows } = await pool.query(
+      `SELECT u.username, u.password_hash, u.hospital_id, h.name
+       FROM users u LEFT JOIN hospitals h ON h.hospital_id = u.hospital_id
+       WHERE u.username = $1`, [username]);
+    const user = rows[0];
+    if (!user || !bcrypt.compareSync(password, user.password_hash)) {
+      return res.status(401).json({ error: "username หรือ password ไม่ถูกต้อง" });
+    }
+    const token = signToken({ hospital_id: user.hospital_id, name: user.name });
+    res.json({ token, hospital_id: user.hospital_id, name: user.name });
+  } catch (e) { next(e); }
+});
+
+// ข้อมูลผู้ใช้ปัจจุบัน
+app.get("/api/me", requireAuth, (req, res) => {
+  res.json({ hospital_id: req.user.hospital_id, name: req.user.name });
+});
+
+// ---------- BORROW (ยืมยา) ----------
+// รพ. ที่สามารถให้ยืมยา drug หนึ่งได้ (สถานะไม่แดง) — สำหรับ dropdown ในฟอร์ม
+app.get("/api/lenders", requireAuth, async (req, res, next) => {
+  try {
+    const { drug } = req.query;
+    const { rows } = await pool.query(
+      `SELECT f.hospital_id, h.name, f.status, f.pred_next_day, f.avg_30d
+       FROM forecasts f JOIN hospitals h ON h.hospital_id = f.hospital_id
+       WHERE f.drug = $1 AND f.status <> 'red' AND f.hospital_id <> $2
+       ORDER BY (f.avg_30d - f.pred_next_day) DESC`,
+      [drug, req.user.hospital_id]);
+    res.json(rows);
+  } catch (e) { next(e); }
+});
+
+// สร้างคำขอยืมยา — อนุญาตเฉพาะยาที่ \"สถานะแดง\" ของโรงพยาบาลผู้ขอ
+app.post("/api/borrow", requireAuth, async (req, res, next) => {
+  try {
+    const from = req.user.hospital_id;
+    const { to_hospital, drug, quantity, reason } = req.body || {};
+    if (!to_hospital || !drug || !quantity) {
+      return res.status(400).json({ error: "กรอก to_hospital / drug / quantity ให้ครบ" });
+    }
+    if (to_hospital === from) return res.status(400).json({ error: "ยืมจากโรงพยาบาลตัวเองไม่ได้" });
+
+    const chk = await pool.query(
+      "SELECT status FROM forecasts WHERE hospital_id=$1 AND drug=$2", [from, drug]);
+    if (!chk.rows[0]) return res.status(400).json({ error: "ไม่พบยานี้ในระบบของโรงพยาบาล" });
+    if (chk.rows[0].status !== "red") {
+      return res.status(403).json({ error: "ยืมยาได้เฉพาะรายการที่สถานะ 🔴 ขาดแคลนเท่านั้น" });
+    }
+
+    const { rows } = await pool.query(
+      `INSERT INTO borrow_requests (from_hospital, to_hospital, drug, quantity, reason)
+       VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+      [from, to_hospital, drug, parseFloat(quantity), reason || null]);
+    res.status(201).json(rows[0]);
+  } catch (e) { next(e); }
+});
+
+// รายการคำขอที่เกี่ยวข้องกับโรงพยาบาลของฉัน (ทั้งขอ + ถูกขอ)
+app.get("/api/borrow", requireAuth, async (req, res, next) => {
+  try {
+    const me = req.user.hospital_id;
+    const { rows } = await pool.query(
+      `SELECT b.*, hf.name AS from_name, ht.name AS to_name
+       FROM borrow_requests b
+       LEFT JOIN hospitals hf ON hf.hospital_id = b.from_hospital
+       LEFT JOIN hospitals ht ON ht.hospital_id = b.to_hospital
+       WHERE b.from_hospital = $1 OR b.to_hospital = $1
+       ORDER BY b.created_at DESC`, [me]);
+    res.json(rows.map((r) => ({ ...r, direction: r.from_hospital === me ? "outgoing" : "incoming" })));
+  } catch (e) { next(e); }
+});
+
+// ผู้ให้ยืม (to_hospital) อนุมัติ/ปฏิเสธคำขอ
+app.patch("/api/borrow/:id", requireAuth, async (req, res, next) => {
+  try {
+    const { status } = req.body || {};
+    if (!["approved", "rejected"].includes(status)) {
+      return res.status(400).json({ error: "status ต้องเป็น approved หรือ rejected" });
+    }
+    const cur = await pool.query("SELECT * FROM borrow_requests WHERE id=$1", [req.params.id]);
+    if (!cur.rows[0]) return res.status(404).json({ error: "ไม่พบคำขอ" });
+    if (cur.rows[0].to_hospital !== req.user.hospital_id) {
+      return res.status(403).json({ error: "เฉพาะโรงพยาบาลผู้ให้ยืมเท่านั้นที่ตอบคำขอได้" });
+    }
+    const { rows } = await pool.query(
+      "UPDATE borrow_requests SET status=$1 WHERE id=$2 RETURNING *", [status, req.params.id]);
+    res.json(rows[0]);
   } catch (e) { next(e); }
 });
 

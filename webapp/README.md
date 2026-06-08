@@ -33,16 +33,41 @@ docker compose up --build
 
 ปิด: `docker compose down`  ·  ล้างข้อมูล DB ด้วย: `docker compose down -v`
 
+## 🔑 บัญชีเข้าสู่ระบบ (Login)
+
+มี 1 บัญชีต่อโรงพยาบาล (seed อัตโนมัติ):
+
+| Username | Password |
+| --- | --- |
+| `HOSP_001` … `HOSP_004` | `medcast123` |
+
+> เปลี่ยนรหัสตั้งต้นได้ด้วย env `DEFAULT_PASSWORD` ของ backend · เปลี่ยน JWT secret ด้วย `JWT_SECRET`
+
+## 🤝 ยืมยา (Borrow)
+
+โรงพยาบาลที่ล็อกอินแล้ว ไปแท็บ **🤝 ยืมยา**:
+- ระบบให้ยืมได้ **เฉพาะยาที่สถานะ 🔴 ขาดแคลน** ของโรงพยาบาลนั้น (backend บังคับ)
+- เลือกโรงพยาบาลผู้ให้ยืม (ระบบแนะนำเฉพาะที่ยาไม่แดง + มี surplus) → กรอกจำนวน/เหตุผล → ส่งคำขอ
+- โรงพยาบาลผู้ให้ยืมเห็นคำขอ "📥 ถูกขอ" แล้วกด **อนุมัติ/ปฏิเสธ** ได้
+
 ## REST API
 
-| Endpoint | คืนค่า |
-| --- | --- |
-| `GET /api/health` | สถานะ + การเชื่อม DB |
-| `GET /api/summary` | KPI (จำนวน รพ., ยาขาด/ใกล้หมด, confidence เฉลี่ย) |
-| `GET /api/hospitals` | รายชื่อ รพ. + พิกัด + สถานะรวม (สำหรับแผนที่) |
-| `GET /api/forecasts?hospital_id=&status=` | พยากรณ์รายยา (กรองได้) |
-| `GET /api/privacy` | สถานะ FL / DP / TLS / weight |
-| `GET /api/weights` | weight กลาง (เรียงตามขนาด) |
+| Endpoint | Auth | คืนค่า |
+| --- | :---: | --- |
+| `GET /api/health` | | สถานะ + การเชื่อม DB |
+| `GET /api/summary` | | KPI (จำนวน รพ., ยาขาด/ใกล้หมด, confidence) |
+| `GET /api/hospitals` | | รายชื่อ รพ. + พิกัด + สถานะรวม (แผนที่) |
+| `GET /api/forecasts?hospital_id=&status=` | | พยากรณ์รายยา (กรองได้) |
+| `GET /api/privacy` | | สถานะ FL / DP / TLS / weight |
+| `GET /api/weights` | | weight กลาง |
+| `POST /api/login` | | `{username,password}` → JWT token |
+| `GET /api/me` | ✅ | ข้อมูลผู้ใช้ปัจจุบัน |
+| `GET /api/lenders?drug=` | ✅ | รพ. ที่ให้ยืมยานั้นได้ (ไม่แดง) |
+| `POST /api/borrow` | ✅ | สร้างคำขอยืม (เฉพาะยาแดง) |
+| `GET /api/borrow` | ✅ | คำขอที่เกี่ยวกับ รพ. ฉัน (ขอ/ถูกขอ) |
+| `PATCH /api/borrow/:id` | ✅ | ผู้ให้ยืมอนุมัติ/ปฏิเสธ |
+
+> Auth = ต้องส่ง header `Authorization: Bearer <token>`
 
 ## หน้าจอ (3 พาเนล)
 1. **🗺️ Overview Map** — แผนที่ Leaflet หมุด รพ. ระบายสีตามสถานะ 🟢🟡🔴
