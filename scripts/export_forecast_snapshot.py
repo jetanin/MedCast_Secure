@@ -20,8 +20,9 @@ def main():
     forecast_df, _ = forecast_all()
     atc = load_atc_names()
     forecast_df["desc_th"] = forecast_df["drug"].map(atc).fillna("")
-    cols = ["hospital_id", "drug", "desc_th", "last_date",
-            "pred_next_day", "avg_30d", "ratio", "status", "confidence"]
+    cols = ["hospital_id", "drug", "desc_th", "last_date", "pred_next_day",
+            "stock_on_hand", "reorder_point", "expiry_date", "days_of_supply",
+            "status", "confidence"]
     forecast_df[cols].to_csv(OUT / "forecast_snapshot.csv", index=False, encoding="utf-8-sig")
     print(f"[saved] forecast_snapshot.csv: {len(forecast_df)} rows")
 

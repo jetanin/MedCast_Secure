@@ -5,11 +5,15 @@ import OverviewMap from "./components/OverviewMap.jsx";
 import AIIntelligence from "./components/AIIntelligence.jsx";
 import PrivacyPanel from "./components/PrivacyPanel.jsx";
 import Borrow from "./components/Borrow.jsx";
+import Alerts from "./components/Alerts.jsx";
+import AuditTrail from "./components/AuditTrail.jsx";
 
 const TABS = [
   { id: "map", label: "🗺️ Overview Map" },
   { id: "ai", label: "🤖 AI Intelligence" },
+  { id: "alerts", label: "🔔 แจ้งเตือน" },
   { id: "borrow", label: "🤝 ยืมยา" },
+  { id: "audit", label: "📜 Audit Trail" },
   { id: "privacy", label: "🔒 Privacy Control" },
 ];
 
@@ -66,7 +70,9 @@ export default function App() {
 
       {tab === "map" && <OverviewMap hospitals={hospitals} />}
       {tab === "ai" && <AIIntelligence hospitals={hospitals} />}
+      {tab === "alerts" && <Alerts />}
       {tab === "borrow" && <Borrow />}
+      {tab === "audit" && <AuditTrail />}
       {tab === "privacy" && <PrivacyPanel />}
 
       <p className="subtitle" style={{ marginTop: 16 }}>MedCast_Secure · Logistics Innovation Hackathon 2026</p>

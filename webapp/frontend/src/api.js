@@ -45,4 +45,7 @@ export const api = {
   listBorrow: () => req("/borrow"),
   actBorrow: (id, status) =>
     req(`/borrow/${id}`, { method: "PATCH", body: JSON.stringify({ status }) }),
+  // alerts + audit
+  alerts: () => req("/alerts"),
+  audit: () => req("/audit"),
 };

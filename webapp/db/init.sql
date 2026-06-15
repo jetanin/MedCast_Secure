@@ -16,9 +16,11 @@ CREATE TABLE IF NOT EXISTS forecasts (
     drug            TEXT NOT NULL,
     desc_th         TEXT,
     last_date       DATE,
-    pred_next_day   DOUBLE PRECISION,
-    avg_30d         DOUBLE PRECISION,
-    ratio           DOUBLE PRECISION,
+    pred_next_day   DOUBLE PRECISION,   -- พยากรณ์การใช้ต่อวัน
+    stock_on_hand   DOUBLE PRECISION,   -- ยาคงคลังปัจจุบัน
+    reorder_point   DOUBLE PRECISION,   -- จุดสั่งซื้อซ้ำ
+    expiry_date     DATE,               -- วันหมดอายุ
+    days_of_supply  DOUBLE PRECISION,   -- จำนวนวันที่ยาเหลือ = stock / pred
     status          TEXT CHECK (status IN ('green', 'yellow', 'red')),
     confidence      DOUBLE PRECISION,
     UNIQUE (hospital_id, drug)
@@ -37,7 +39,9 @@ CREATE TABLE IF NOT EXISTS users (
     id            SERIAL PRIMARY KEY,
     username      TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
-    hospital_id   TEXT REFERENCES hospitals(hospital_id),
+    hospital_id   TEXT REFERENCES hospitals(hospital_id),  -- NULL = admin (ดูได้ทุก รพ.)
+    role          TEXT NOT NULL DEFAULT 'hospital'         -- 'admin' | 'hospital'
+                  CHECK (role IN ('admin', 'hospital')),
     created_at    TIMESTAMPTZ DEFAULT now()
 );
 
@@ -56,3 +60,16 @@ CREATE TABLE IF NOT EXISTS borrow_requests (
 
 CREATE INDEX IF NOT EXISTS idx_borrow_from ON borrow_requests(from_hospital);
 CREATE INDEX IF NOT EXISTS idx_borrow_to ON borrow_requests(to_hospital);
+
+-- Audit Trail: บันทึกทุกธุรกรรมแบบแก้ย้อนหลังไม่ได้ (timestamp + IP) ตามมาตรฐาน e-Document
+CREATE TABLE IF NOT EXISTS audit_log (
+    id            SERIAL PRIMARY KEY,
+    ts            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    actor         TEXT,         -- hospital_id ผู้ทำรายการ
+    action        TEXT NOT NULL,-- login / create_borrow / approve_borrow / reject_borrow
+    entity        TEXT,         -- ประเภท (borrow_request ...)
+    entity_id     TEXT,
+    detail        TEXT,
+    ip            TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts DESC);

@@ -8,8 +8,23 @@ const { signToken, requireAuth } = require("./auth");
 const app = express();
 const PORT = process.env.PORT || 4000;
 
+app.set("trust proxy", true); // อ่าน IP จริงผ่าน X-Forwarded-For (หลัง nginx)
 app.use(cors());
 app.use(express.json());
+
+// บันทึก Audit Trail (timestamp + IP) — ใช้ best-effort ไม่ให้ล้มทั้ง request
+async function logAudit(req, action, entity, entityId, detail) {
+  try {
+    await pool.query(
+      `INSERT INTO audit_log (actor, action, entity, entity_id, detail, ip)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [req.user?.hospital_id || null, action, entity, entityId != null ? String(entityId) : null,
+       detail || null, req.ip]
+    );
+  } catch (e) {
+    console.error("[audit] failed:", e.message);
+  }
+}
 
 // health check
 app.get("/api/health", async (_req, res) => {
@@ -50,10 +65,10 @@ app.get("/api/forecasts", async (req, res, next) => {
     if (status) { params.push(status); where.push(`status=$${params.length}`); }
     const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
     const { rows } = await pool.query(
-      `SELECT hospital_id, drug, desc_th, last_date, pred_next_day, avg_30d,
-              ratio, status, confidence
+      `SELECT hospital_id, drug, desc_th, last_date, pred_next_day, stock_on_hand,
+              reorder_point, expiry_date, days_of_supply, status, confidence
        FROM forecasts ${clause}
-       ORDER BY hospital_id, drug`, params);
+       ORDER BY days_of_supply ASC NULLS FIRST`, params);
     res.json(rows);
   } catch (e) { next(e); }
 });
@@ -112,6 +127,8 @@ app.post("/api/login", async (req, res, next) => {
       return res.status(401).json({ error: "username หรือ password ไม่ถูกต้อง" });
     }
     const token = signToken({ hospital_id: user.hospital_id, name: user.name });
+    await logAudit({ user: { hospital_id: user.hospital_id }, ip: req.ip },
+                   "login", "user", user.hospital_id, "เข้าสู่ระบบ");
     res.json({ token, hospital_id: user.hospital_id, name: user.name });
   } catch (e) { next(e); }
 });
@@ -122,15 +139,23 @@ app.get("/api/me", requireAuth, (req, res) => {
 });
 
 // ---------- BORROW (ยืมยา) ----------
-// รพ. ที่สามารถให้ยืมยา drug หนึ่งได้ (สถานะไม่แดง) — สำหรับ dropdown ในฟอร์ม
+// รพ. ที่ให้ยืมยา drug ได้ = สถานะ 🟢 (เหลือ ≥14 วัน) — เรียงตามระยะทาง GPS ใกล้สุด (Smart Borrowing)
 app.get("/api/lenders", requireAuth, async (req, res, next) => {
   try {
     const { drug } = req.query;
     const { rows } = await pool.query(
-      `SELECT f.hospital_id, h.name, f.status, f.pred_next_day, f.avg_30d
-       FROM forecasts f JOIN hospitals h ON h.hospital_id = f.hospital_id
-       WHERE f.drug = $1 AND f.status <> 'red' AND f.hospital_id <> $2
-       ORDER BY (f.avg_30d - f.pred_next_day) DESC`,
+      `WITH me AS (SELECT latitude AS lat, longitude AS lon
+                   FROM hospitals WHERE hospital_id = $2)
+       SELECT f.hospital_id, h.name, f.status, f.days_of_supply, f.stock_on_hand,
+              GREATEST(0, f.stock_on_hand - f.reorder_point) AS surplus,
+              ROUND((6371 * acos(greatest(-1, least(1,
+                cos(radians(me.lat)) * cos(radians(h.latitude)) *
+                cos(radians(h.longitude) - radians(me.lon)) +
+                sin(radians(me.lat)) * sin(radians(h.latitude))))))::numeric, 1) AS distance_km
+       FROM forecasts f
+       JOIN hospitals h ON h.hospital_id = f.hospital_id, me
+       WHERE f.drug = $1 AND f.status = 'green' AND f.hospital_id <> $2
+       ORDER BY distance_km ASC`,
       [drug, req.user.hospital_id]);
     res.json(rows);
   } catch (e) { next(e); }
@@ -152,11 +177,19 @@ app.post("/api/borrow", requireAuth, async (req, res, next) => {
     if (chk.rows[0].status !== "red") {
       return res.status(403).json({ error: "ยืมยาได้เฉพาะรายการที่สถานะ 🔴 ขาดแคลนเท่านั้น" });
     }
+    // ผู้ให้ยืมต้องมียาตัวนี้สถานะ 🟢 (โซนปลอดภัย ≥14 วัน)
+    const lend = await pool.query(
+      "SELECT status FROM forecasts WHERE hospital_id=$1 AND drug=$2", [to_hospital, drug]);
+    if (!lend.rows[0] || lend.rows[0].status !== "green") {
+      return res.status(403).json({ error: "โรงพยาบาลผู้ให้ยืมต้องมียานี้สถานะ 🟢 (เหลือ ≥14 วัน)" });
+    }
 
     const { rows } = await pool.query(
       `INSERT INTO borrow_requests (from_hospital, to_hospital, drug, quantity, reason)
        VALUES ($1,$2,$3,$4,$5) RETURNING *`,
       [from, to_hospital, drug, parseFloat(quantity), reason || null]);
+    await logAudit(req, "create_borrow", "borrow_request", rows[0].id,
+                   `ขอยืม ${drug} จำนวน ${quantity} จาก ${to_hospital}`);
     res.status(201).json(rows[0]);
   } catch (e) { next(e); }
 });
@@ -190,7 +223,60 @@ app.patch("/api/borrow/:id", requireAuth, async (req, res, next) => {
     }
     const { rows } = await pool.query(
       "UPDATE borrow_requests SET status=$1 WHERE id=$2 RETURNING *", [status, req.params.id]);
+    await logAudit(req, status === "approved" ? "approve_borrow" : "reject_borrow",
+                   "borrow_request", req.params.id,
+                   `${status === "approved" ? "อนุมัติ" : "ปฏิเสธ"}คำขอ #${req.params.id} (${rows[0].drug})`);
     res.json(rows[0]);
+  } catch (e) { next(e); }
+});
+
+// ---------- AUDIT TRAIL ----------
+// บันทึกธุรกรรมล่าสุด (timestamp + IP) — โปร่งใส ตรวจสอบได้
+app.get("/api/audit", requireAuth, async (req, res, next) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit || "100", 10), 500);
+    const { rows } = await pool.query(
+      `SELECT a.id, a.ts, a.actor, h.name AS actor_name, a.action, a.entity,
+              a.entity_id, a.detail, a.ip
+       FROM audit_log a LEFT JOIN hospitals h ON h.hospital_id = a.actor
+       ORDER BY a.ts DESC LIMIT $1`, [limit]);
+    res.json(rows);
+  } catch (e) { next(e); }
+});
+
+// ---------- ALERTS (Expiry/FEFO + Reorder + Shortage) ----------
+app.get("/api/alerts", requireAuth, async (req, res, next) => {
+  try {
+    const me = req.user.hospital_id;
+    const expiryDays = parseInt(req.query.expiry_days || "120", 10);
+
+    // FEFO: ใกล้หมดอายุก่อน (รวมที่หมดอายุแล้ว) — เรียงตามวันหมดอายุ
+    const expiring = await pool.query(
+      `SELECT hospital_id, drug, desc_th, stock_on_hand, expiry_date,
+              (expiry_date - CURRENT_DATE) AS days_to_expiry
+       FROM forecasts
+       WHERE hospital_id = $1 AND expiry_date IS NOT NULL
+         AND (expiry_date - CURRENT_DATE) <= $2
+       ORDER BY expiry_date ASC`, [me, expiryDays]);
+
+    // ต่ำกว่าจุดสั่งซื้อ (reorder point)
+    const reorder = await pool.query(
+      `SELECT hospital_id, drug, desc_th, stock_on_hand, reorder_point, days_of_supply, status
+       FROM forecasts
+       WHERE hospital_id = $1 AND stock_on_hand <= reorder_point
+       ORDER BY (stock_on_hand - reorder_point) ASC`, [me]);
+
+    // ขาดแคลน (สถานะแดง)
+    const shortage = await pool.query(
+      `SELECT hospital_id, drug, desc_th, stock_on_hand, days_of_supply, status
+       FROM forecasts WHERE hospital_id = $1 AND status = 'red'
+       ORDER BY days_of_supply ASC`, [me]);
+
+    res.json({
+      expiring: expiring.rows,
+      reorder: reorder.rows,
+      shortage: shortage.rows,
+    });
   } catch (e) { next(e); }
 });
 

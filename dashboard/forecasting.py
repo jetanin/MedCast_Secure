@@ -53,10 +53,18 @@ def build_features(usage: pd.DataFrame) -> pd.DataFrame:
     return g
 
 
-def status_from_ratio(ratio: float) -> str:
-    if pd.isna(ratio) or ratio <= 1.0:
+def status_from_days(days: float) -> str:
+    """สถานะตาม proposal: จำนวนวันที่ยาเหลือในคลัง (days-of-supply).
+
+    🟢 green  ≥ 14 วัน  (โซนปลอดภัย — ให้ยืม/คืนยาได้)
+    🟡 yellow 4–13 วัน  (เตรียมพิจารณา)
+    🔴 red    ≤ 3 วัน   (ขาดคลัง — แจ้งเตือนด่วน / ขอยืมยา)
+    """
+    if pd.isna(days):
+        return "red"
+    if days >= 14:
         return "green"
-    if ratio <= 1.5:
+    if days >= 4:
         return "yellow"
     return "red"
 
@@ -75,6 +83,14 @@ def load_hospital_master() -> pd.DataFrame:
     return pd.read_csv(HOSP_DIR / "hospital_master.csv")
 
 
+def load_stock() -> pd.DataFrame:
+    """คลังยาปัจจุบัน (stock_on_hand, reorder_point, expiry_date) ต่อ (รพ., ยา)."""
+    fp = HOSP_DIR / "stock_snapshot.csv"
+    if not fp.exists():
+        return pd.DataFrame(columns=["hospital_id", "drug", "stock_on_hand", "reorder_point", "expiry_date"])
+    return pd.read_csv(fp)
+
+
 def list_hospital_files():
     return sorted(HOSP_DIR.glob("HOSP_*.csv"))
 
@@ -90,6 +106,10 @@ def forecast_all():
     coef, intercept = bundle["coef"], bundle["intercept"]
     scaler, FEATURES = bundle["scaler"], bundle["features"]
 
+    # คลังยาปัจจุบัน -> lookup (hospital_id, drug) : {stock, reorder, expiry}
+    stock = load_stock()
+    stock_map = {(r.hospital_id, r.drug): r for r in stock.itertuples(index=False)}
+
     rows, history = [], {}
     for fp in list_hospital_files():
         hid = fp.stem
@@ -100,19 +120,28 @@ def forecast_all():
         X = scaler.transform(latest[FEATURES])
         pred = np.clip(X @ coef + intercept, 0, None)
 
-        ratio = pred / latest["roll_mean_30"].replace(0, np.nan).values
         # confidence: ความผันผวนสัมพัทธ์ต่ำ -> มั่นใจมาก (0-1)
         conf = (1.0 / (1.0 + latest["cv_30"].values)).round(3)
 
         for i, (_, r) in enumerate(latest.iterrows()):
+            daily = max(float(pred[i]), 0.1)  # อัตราใช้ต่อวัน (กันหารศูนย์)
+            srow = stock_map.get((hid, r["drug"]))
+            stock_on_hand = float(srow.stock_on_hand) if srow is not None else np.nan
+            reorder_point = float(srow.reorder_point) if srow is not None else np.nan
+            expiry_date = srow.expiry_date if srow is not None else None
+            # days-of-supply = ยาคงคลัง / อัตราการใช้ต่อวัน (พยากรณ์)
+            days = stock_on_hand / daily if not np.isnan(stock_on_hand) else np.nan
             rows.append({
                 "hospital_id": hid,
                 "drug": r["drug"],
                 "last_date": r["datum"].date(),
                 "pred_next_day": round(float(pred[i]), 1),
                 "avg_30d": round(float(r["roll_mean_30"]), 1),
-                "ratio": round(float(ratio[i]), 2) if not np.isnan(ratio[i]) else np.nan,
-                "status": status_from_ratio(ratio[i]),
+                "stock_on_hand": stock_on_hand,
+                "reorder_point": reorder_point,
+                "expiry_date": expiry_date,
+                "days_of_supply": round(float(days), 1) if not np.isnan(days) else np.nan,
+                "status": status_from_days(days),
                 "confidence": float(conf[i]),
             })
 

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, auth } from "../api";
+import BorrowMemo from "./BorrowMemo.jsx";
 
 const STATUS_TH = {
   pending: "⏳ รออนุมัติ", approved: "✅ อนุมัติแล้ว", rejected: "❌ ปฏิเสธ",
@@ -15,6 +16,7 @@ export default function Borrow() {
   const [reason, setReason] = useState("");
   const [requests, setRequests] = useState([]);
   const [msg, setMsg] = useState(null);
+  const [memoFor, setMemoFor] = useState(null); // คำขอที่กำลังเปิดเอกสาร
 
   function refresh() {
     api.listBorrow().then(setRequests).catch((e) => setMsg(e.message));
@@ -67,12 +69,12 @@ export default function Borrow() {
               ))}
             </select>
 
-            <label className="muted">ยืมจากโรงพยาบาล (ที่มียาพอ)</label>
+            <label className="muted">ยืมจากโรงพยาบาล 🟢 (เรียงตามระยะทาง GPS ใกล้สุด)</label>
             <select value={toHospital} onChange={(e) => setToHospital(e.target.value)}>
-              {lenders.length === 0 && <option value="">— ไม่มีโรงพยาบาลที่ให้ยืมได้ —</option>}
+              {lenders.length === 0 && <option value="">— ไม่มีโรงพยาบาล 🟢 ที่ให้ยืมได้ —</option>}
               {lenders.map((l) => (
                 <option key={l.hospital_id} value={l.hospital_id}>
-                  {l.name} (เหลือ ~{Math.max(0, Math.round(l.avg_30d - l.pred_next_day))})
+                  {l.name} · {l.distance_km} กม. · เหลือ {Math.round(l.days_of_supply)} วัน (surplus {Math.round(l.surplus)})
                 </option>
               ))}
             </select>
@@ -111,6 +113,7 @@ export default function Borrow() {
                       <button className="mini no" onClick={() => act(r.id, "rejected")}>ปฏิเสธ</button>
                     </>
                   )}
+                  <button className="mini doc" onClick={() => setMemoFor(r)}>📄 เอกสาร</button>
                 </td>
               </tr>
             ))}
@@ -120,6 +123,8 @@ export default function Borrow() {
           </tbody>
         </table>
       </div>
+
+      {memoFor && <BorrowMemo request={memoFor} onClose={() => setMemoFor(null)} />}
     </div>
   );
 }

@@ -17,8 +17,7 @@ export default function AIIntelligence({ hospitals }) {
 
   const chartData = rows.map((r) => ({
     drug: r.drug,
-    พยากรณ์: Math.round(r.pred_next_day * 10) / 10,
-    เฉลี่ย30วัน: Math.round(r.avg_30d * 10) / 10,
+    "เหลือ(วัน)": Math.round(r.days_of_supply * 10) / 10,
     status: r.status,
   }));
 
@@ -34,15 +33,17 @@ export default function AIIntelligence({ hospitals }) {
         ))}
       </select>
 
-      <ResponsiveContainer width="100%" height={340}>
+      <p className="muted" style={{ fontSize: "0.82rem" }}>
+        จำนวนวันที่ยาเหลือในคลัง (days-of-supply) — 🟢 ≥14 · 🟡 4–13 · 🔴 ≤3 วัน
+      </p>
+      <ResponsiveContainer width="100%" height={320}>
         <BarChart data={chartData} margin={{ top: 20, right: 20, bottom: 10, left: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
           <XAxis dataKey="drug" stroke="#94a3b8" />
           <YAxis stroke="#94a3b8" />
           <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid #334155" }} />
           <Legend />
-          <Bar dataKey="เฉลี่ย30วัน" fill="#3498db" />
-          <Bar dataKey="พยากรณ์">
+          <Bar dataKey="เหลือ(วัน)">
             {chartData.map((d, i) => <Cell key={i} fill={COLOR[d.status]} />)}
           </Bar>
         </BarChart>
@@ -50,7 +51,7 @@ export default function AIIntelligence({ hospitals }) {
 
       <table style={{ marginTop: 14 }}>
         <thead>
-          <tr><th>กลุ่มยา</th><th>รายละเอียด</th><th>พยากรณ์</th><th>เฉลี่ย30วัน</th><th>สถานะ</th><th>Confidence</th></tr>
+          <tr><th>กลุ่มยา</th><th>รายละเอียด</th><th>พยากรณ์/วัน</th><th>คงคลัง</th><th>เหลือ(วัน)</th><th>สถานะ</th><th>Conf.</th></tr>
         </thead>
         <tbody>
           {rows.map((r) => (
@@ -58,7 +59,8 @@ export default function AIIntelligence({ hospitals }) {
               <td>{r.drug}</td>
               <td className="muted">{r.desc_th}</td>
               <td>{r.pred_next_day?.toFixed(1)}</td>
-              <td>{r.avg_30d?.toFixed(1)}</td>
+              <td>{r.stock_on_hand?.toFixed(0)}</td>
+              <td>{r.days_of_supply?.toFixed(0)}</td>
               <td><span className={`badge ${r.status}`}>{STATUS_TH[r.status]}</span></td>
               <td>{Math.round(r.confidence * 100)}%</td>
             </tr>

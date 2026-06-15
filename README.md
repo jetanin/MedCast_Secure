@@ -71,9 +71,11 @@ feature engineering → train → weights
 
 อยู่ใน [`dashboard/`](dashboard/) — 3 พาเนลตามโจทย์
 
-1. **🗺️ Overview Map** — แผนที่ตำแหน่ง รพ. พร้อมสถานะ 🟢 เพียงพอ / 🟡 ใกล้หมด / 🔴 ขาดแคลน
-2. **🤖 AI Intelligence** — กราฟพยากรณ์ความต้องการยา + **Confidence Score**
+1. **🗺️ Overview Map** — แผนที่ตำแหน่ง รพ. พร้อมสถานะตาม **จำนวนวันที่ยาเหลือในคลัง (days-of-supply)**: 🟢 ≥14 วัน (ให้ยืมได้) / 🟡 4–13 วัน / 🔴 ≤3 วัน (ขาดคลัง)
+2. **🤖 AI Intelligence** — กราฟพยากรณ์ความต้องการยา + ยาคงคลัง + **Confidence Score**
 3. **🔒 Privacy Control Center** — สถานะ Federated Learning / Differential Privacy / TLS + กระแสข้อมูล
+
+> **Smart Borrowing:** รพ. สถานะ 🔴 ขอยืมยาจาก รพ. 🟢 ที่อยู่**ใกล้สุดด้วย GPS** → ออกเอกสาร "บันทึกข้อความ" พิมพ์ PDF ได้ (ในเว็บแอป)
 
 dashboard โหลด **เฉพาะ weight กลาง** (47 ค่า) ไม่แตะข้อมูลดิบของ รพ.
 
@@ -129,6 +131,7 @@ MedCast_Secure/
 │   └── frontend/               # React + Vite + Leaflet + Recharts
 ├── scripts/
 │   ├── generate_hospital_data.py    # สร้างข้อมูลจำลอง 4 รพ.
+│   ├── generate_stock_snapshot.py   # สร้างคลังยาปัจจุบัน (stock/reorder/expiry)
 │   ├── export_weights.py            # export weight เป็น CSV
 │   └── export_forecast_snapshot.py  # export snapshot พยากรณ์ (seed web app)
 ├── docs/

@@ -63,6 +63,7 @@ tab_map, tab_ai, tab_priv = st.tabs(["🗺️ Overview Map", "🤖 AI Intelligen
 # ========== 1) OVERVIEW MAP ==========
 with tab_map:
     st.subheader("ตำแหน่งโรงพยาบาลและสถานะยา")
+    st.caption("สถานะตามจำนวนวันที่ยาเหลือในคลัง (days-of-supply): 🟢 ≥14 วัน (ให้ยืมได้) · 🟡 4–13 วัน · 🔴 ≤3 วัน (ขาดคลัง)")
     fig = px.scatter_map(
         map_df, lat="latitude", lon="longitude",
         color="worst_status", color_discrete_map=STATUS_COLOR,
@@ -94,10 +95,11 @@ with tab_ai:
 
     fdrug = forecast_df[(forecast_df.hospital_id == hid) & (forecast_df.drug == drug)].iloc[0]
 
-    m1, m2, m3 = st.columns(3)
-    m1.metric("พยากรณ์วันถัดไป", f"{fdrug['pred_next_day']:.0f} หน่วย")
-    m2.metric("สถานะ", STATUS_TH[fdrug["status"]])
-    m3.metric("Confidence Score", f"{fdrug['confidence']*100:.0f}%")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("พยากรณ์ใช้/วัน", f"{fdrug['pred_next_day']:.0f} หน่วย")
+    m2.metric("ยาคงคลัง", f"{fdrug['stock_on_hand']:.0f}")
+    m3.metric("เหลือใช้ได้ (วัน)", f"{fdrug['days_of_supply']:.0f} วัน", help="days-of-supply = คงคลัง ÷ พยากรณ์/วัน")
+    m4.metric("สถานะ", STATUS_TH[fdrug["status"]])
 
     # กราฟย้อนหลัง 90 วัน + จุดพยากรณ์
     hist = history[hid]
@@ -116,12 +118,12 @@ with tab_ai:
                        margin=dict(l=0, r=0, t=40, b=0), legend_title="")
     st.plotly_chart(fig2, use_container_width=True)
 
-    st.markdown(f"**ภาพรวมทุกกลุ่มยาที่ {hid}**")
+    st.markdown(f"**ภาพรวมทุกกลุ่มยาที่ {hid}**  (🟢 ≥14 วัน · 🟡 4–13 วัน · 🔴 ≤3 วัน)")
     tbl = forecast_df[forecast_df.hospital_id == hid][
-        ["drug", "pred_next_day", "avg_30d", "ratio", "status", "confidence"]].copy()
+        ["drug", "pred_next_day", "stock_on_hand", "days_of_supply", "status", "confidence"]].copy()
     tbl["status"] = tbl["status"].map(STATUS_TH)
     tbl["confidence"] = (tbl["confidence"] * 100).round(0).astype(int).astype(str) + "%"
-    tbl.columns = ["กลุ่มยา", "พยากรณ์", "เฉลี่ย30วัน", "อัตราส่วน", "สถานะ", "Confidence"]
+    tbl.columns = ["กลุ่มยา", "พยากรณ์/วัน", "คงคลัง", "เหลือ(วัน)", "สถานะ", "Confidence"]
     st.dataframe(tbl, use_container_width=True, hide_index=True)
 
 # ========== 3) PRIVACY CONTROL CENTER ==========

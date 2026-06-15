@@ -1,2 +1,39 @@
-/data
+# ===== Secrets =====
 .env
+*.env
+!.env.example
+
+# ===== Data (regenerate ผ่าน notebook 00–05 + scripts) =====
+/data/
+
+# ===== Model binaries (regenerate ผ่าน notebook 04) — เก็บเฉพาะผลลัพธ์ .csv =====
+*.joblib
+models/*.pkl
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# ===== Node / Frontend =====
+node_modules/
+dist/
+build/
+.vite/
+npm-debug.log*
+yarn-error.log*
+
+# ===== Docker =====
+# (pgdata เป็น named volume — ไม่ได้อยู่ใน repo)
+
+# ===== OS / Editor =====
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/

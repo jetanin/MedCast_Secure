@@ -70,3 +70,42 @@ select { background: #0f172a; color: var(--text); border: 1px solid #334155;
         cursor: pointer; font-size: 0.8rem; color: #0f172a; font-weight: 600; }
 .mini.ok { background: var(--green); }
 .mini.no { background: var(--red); }
+.mini.doc { background: #cbd5e1; }
+
+/* ---------- เอกสารบันทึกข้อความ (memo) ---------- */
+.memo-overlay {
+  position: fixed; inset: 0; z-index: 50; overflow: auto;
+  background: rgba(15, 23, 42, 0.85); padding: 24px;
+}
+.memo-toolbar { display: flex; gap: 8px; align-items: center; max-width: 800px; margin: 0 auto 14px; }
+.memo-paper {
+  background: #fff; color: #000; max-width: 800px; margin: 0 auto;
+  padding: 56px 64px; border-radius: 6px;
+  font-family: "TH Sarabun New", "Sarabun", "Tahoma", serif; font-size: 17px; line-height: 2.1;
+}
+.memo-title { text-align: center; font-size: 26px; font-weight: 700; margin: 0 0 24px; }
+.memo-center { text-align: center; }
+.memo-list { padding-left: 28px; }
+.memo-list li { margin-bottom: 6px; }
+.memo-signs { display: flex; justify-content: space-around; gap: 24px; margin-top: 40px; text-align: center; }
+.memo-sign > div { margin-bottom: 8px; }
+
+/* ช่องกรอกแบบเส้นประ (ดูเหมือนฟอร์มราชการ) */
+.memo-paper .ln {
+  border: none; border-bottom: 1px dotted #333; background: transparent;
+  color: #000; font: inherit; padding: 0 4px; text-align: center;
+}
+.memo-paper .ln:focus { outline: none; border-bottom-color: #2563eb; }
+.ln.w2 { width: 40px; } .ln.w3 { width: 60px; } .ln.w6 { width: 140px; }
+.ln.w8 { width: 200px; } .ln.w-grow { width: 320px; }
+.ln.w-item { width: 70%; text-align: left; }
+
+/* โหมดพิมพ์: แสดงเฉพาะเอกสาร */
+@media print {
+  body * { visibility: hidden !important; }
+  #memo, #memo * { visibility: visible !important; }
+  .memo-overlay { position: static; background: #fff; padding: 0; }
+  #memo { position: absolute; left: 0; top: 0; width: 100%; padding: 24px 40px; border-radius: 0; }
+  .no-print { display: none !important; }
+  .memo-paper .ln { border-bottom: 1px dotted #333; }
+}
