@@ -57,7 +57,13 @@ select { background: #0f172a; color: var(--text); border: 1px solid #334155;
 
 /* topbar */
 .topbar { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
-.user-box { display: flex; align-items: center; gap: 10px; }
+.user-box { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+
+/* tab bar (tabs ซ้าย, freq toggle ขวา) */
+.tabbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.tabbar .tabs { margin-bottom: 0; }
+.pager select { background: #0f172a; color: var(--text); border: 1px solid #334155;
+                border-radius: 6px; padding: 3px 6px; margin: 0 6px; }
 
 /* forms inside panels */
 .panel form { display: flex; flex-direction: column; gap: 6px; }
@@ -72,6 +78,16 @@ select { background: #0f172a; color: var(--text); border: 1px solid #334155;
 .mini.no { background: var(--red); }
 .mini.doc { background: #cbd5e1; }
 
+/* pagination + freq toggle */
+.pager { display: flex; align-items: center; gap: 12px; justify-content: center; margin-top: 12px; }
+.pg-btn { background: var(--panel); border: 1px solid #334155; color: var(--text);
+          border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+.pg-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.freq-toggle { display: inline-flex; gap: 4px; background: var(--panel); padding: 4px; border-radius: 10px; }
+.freq-toggle button { background: transparent; border: none; color: var(--muted);
+                      padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 0.9rem; }
+.freq-toggle button.active { background: #2563eb; color: #fff; }
+
 /* ---------- เอกสารบันทึกข้อความ (memo) ---------- */
 .memo-overlay {
   position: fixed; inset: 0; z-index: 50; overflow: auto;
@@ -81,9 +97,12 @@ select { background: #0f172a; color: var(--text); border: 1px solid #334155;
 .memo-paper {
   background: #fff; color: #000; max-width: 800px; margin: 0 auto;
   padding: 56px 64px; border-radius: 6px;
-  font-family: "TH Sarabun New", "Sarabun", "Tahoma", serif; font-size: 17px; line-height: 2.1;
+  font-family: "Sarabun", "TH Sarabun New", "Tahoma", serif;
+  font-size: 16px; font-weight: 400; line-height: 1.9;   /* เนื้อหา 16 ตัวบาง */
 }
-.memo-title { text-align: center; font-size: 26px; font-weight: 700; margin: 0 0 24px; }
+.memo-title { text-align: center; font-size: 18px; font-weight: 700; margin: 0 0 20px; }  /* หัวเอกสาร 18 ตัวหนา */
+.memo-paper h2, .memo-paper h3, .memo-h { font-size: 16px; font-weight: 700; }            /* หัวข้อ 16 ตัวหนา */
+.memo-paper b { font-weight: 700; }
 .memo-center { text-align: center; }
 .memo-list { padding-left: 28px; }
 .memo-list li { margin-bottom: 6px; }
@@ -96,9 +115,32 @@ select { background: #0f172a; color: var(--text); border: 1px solid #334155;
   color: #000; font: inherit; padding: 0 4px; text-align: center;
 }
 .memo-paper .ln:focus { outline: none; border-bottom-color: #2563eb; }
+.memo-paper .ln-date {
+  border: 1px solid #94a3b8; background: #fff; color: #000; font: inherit;
+  border-radius: 6px; padding: 1px 6px; margin: 0 4px;
+}
 .ln.w2 { width: 40px; } .ln.w3 { width: 60px; } .ln.w6 { width: 140px; }
 .ln.w8 { width: 200px; } .ln.w-grow { width: 320px; }
 .ln.w-item { width: 70%; text-align: left; }
+
+/* ข้อความที่แสดงเฉพาะตอนพิมพ์ (แทน picker วันที่/เวลา) */
+.print-only { display: none; }
+
+/* แถบค้นหา/ฟิลเตอร์ */
+.filterbar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.filterbar .search { flex: 1; min-width: 220px; background: #0f172a; color: var(--text);
+                     border: 1px solid #334155; border-radius: 8px; padding: 8px 12px; font-size: 0.92rem; }
+.filterbar select { background: #0f172a; color: var(--text); border: 1px solid #334155;
+                    border-radius: 8px; padding: 8px; }
+
+/* preview เอกสารที่เซ็น (รูป/PDF) */
+.preview-overlay { position: fixed; inset: 0; z-index: 60; background: rgba(15,23,42,0.9);
+                   display: flex; align-items: center; justify-content: center; padding: 20px; }
+.preview-box { background: #fff; border-radius: 8px; width: min(900px, 95vw); max-height: 92vh;
+               display: flex; flex-direction: column; overflow: hidden; }
+.preview-bar { display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+               background: var(--panel); }
+.preview-content { width: 100%; height: 80vh; border: none; object-fit: contain; background: #475569; }
 
 /* โหมดพิมพ์: แสดงเฉพาะเอกสาร */
 @media print {
@@ -107,5 +149,7 @@ select { background: #0f172a; color: var(--text); border: 1px solid #334155;
   .memo-overlay { position: static; background: #fff; padding: 0; }
   #memo { position: absolute; left: 0; top: 0; width: 100%; padding: 24px 40px; border-radius: 0; }
   .no-print { display: none !important; }
+  .print-only { display: inline !important; }   /* โชว์ข้อความวันที่/เวลา (ไม่มีกรอบ) */
   .memo-paper .ln { border-bottom: 1px dotted #333; }
+  .memo-paper .ln-date { border: none !important; padding: 0; }
 }

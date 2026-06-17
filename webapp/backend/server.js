@@ -1,40 +1,89 @@
+const fs = require("fs");
+const path = require("path");
 const express = require("express");
 const cors = require("cors");
 const bcrypt = require("bcryptjs");
+const maxmind = require("maxmind");
 const { pool, waitForDb } = require("./db");
 const { seed } = require("./seed");
-const geoip = require("geoip-lite");
 const { signToken, requireAuth, requireAdmin } = require("./auth");
 
 const app = express();
 const PORT = process.env.PORT || 4000;
 
+// ===== IP geolocation (hybrid) =====
+// IP_GEO=maxmind (default, offline, ระดับจังหวัด) | ipapi (online, ระดับเขต/อำเภอ)
+const IP_GEO = (process.env.IP_GEO || "maxmind").toLowerCase();
+const GEOIP_DB = process.env.GEOIP_DB || path.join(__dirname, "GeoLite2-City.mmdb");
+let _mmReader;  // cache promise
+function mmReader() {
+  if (_mmReader === undefined) {
+    _mmReader = fs.existsSync(GEOIP_DB)
+      ? maxmind.open(GEOIP_DB).catch((e) => { console.error("[geoip] open failed:", e.message); return null; })
+      : Promise.resolve(null);
+    if (!fs.existsSync(GEOIP_DB)) console.warn(`[geoip] ไม่พบ ${GEOIP_DB} (ดูวิธีโหลด GeoLite2 ใน README)`);
+  }
+  return _mmReader;
+}
+
 app.set("trust proxy", true); // อ่าน IP จริงผ่าน X-Forwarded-For (หลัง nginx)
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "12mb" }));  // รองรับอัปโหลดเอกสารเซ็นแล้ว (base64)
 
-// แปลง IP -> ตำแหน่งโดยประมาณ (offline geoip) — IP ภายในแสดงเป็น LAN
-function ipLocation(ip) {
+function isPrivateIp(ip) {
+  return ip === "::1" || ip === "127.0.0.1" ||
+    ip.startsWith("10.") || ip.startsWith("192.168.") ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(ip);
+}
+
+// MaxMind offline (ระดับจังหวัด/ประเทศ) — privacy-first ข้อมูลไม่ออกจากระบบ
+async function viaMaxmind(ip) {
+  const reader = await mmReader();
+  if (!reader) return "ไม่ทราบตำแหน่ง (ไม่มี GeoLite2 DB)";
+  const rec = reader.get(ip);
+  if (!rec) return "ไม่ทราบตำแหน่ง";
+  const city = rec.city && rec.city.names && rec.city.names.en;
+  const sub = rec.subdivisions && rec.subdivisions[0] && rec.subdivisions[0].names.en;
+  const country = rec.country && rec.country.names && rec.country.names.en;
+  const parts = [city, sub, country].filter(Boolean);
+  return parts.length ? [...new Set(parts)].join(", ") : "ไม่ทราบตำแหน่ง";
+}
+
+// ip-api.com (ออนไลน์ ระดับเขต/อำเภอ เช่น "Bang Khae, Bangkok, Thailand")
+async function viaIpApi(ip) {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 3000);
+    const r = await fetch(
+      `http://ip-api.com/json/${ip}?fields=status,country,regionName,city,district`,
+      { signal: ctrl.signal });
+    clearTimeout(timer);
+    const j = await r.json();
+    if (j.status !== "success") return "ไม่ทราบตำแหน่ง";
+    return [...new Set([j.district, j.city, j.regionName, j.country].filter(Boolean))].join(", ");
+  } catch {
+    return "ไม่ทราบตำแหน่ง";
+  }
+}
+
+// hybrid: เลือก provider ตาม env IP_GEO (default maxmind/offline) — IP ภายใน = LAN
+async function ipLocation(ip) {
   if (!ip) return null;
   const clean = ip.replace(/^::ffff:/, "");
-  if (clean === "::1" || clean === "127.0.0.1" ||
-      clean.startsWith("10.") || clean.startsWith("192.168.") ||
-      /^172\.(1[6-9]|2\d|3[01])\./.test(clean)) {
-    return "เครือข่ายภายใน (LAN)";
-  }
-  const g = geoip.lookup(clean);
-  if (!g) return "ไม่ทราบตำแหน่ง";
-  return [g.city, g.region, g.country].filter(Boolean).join(", ");
+  if (isPrivateIp(clean)) return "เครือข่ายภายใน (LAN)";
+  return IP_GEO === "ipapi" ? viaIpApi(clean) : viaMaxmind(clean);
 }
 
 // นำสต็อกใหม่มาคำนวณ days-of-supply + สถานะสีใหม่ (real-time refresh หลังมีข้อมูลใหม่)
 async function recomputeForecast(hospitalId, drug) {
+  // อัปเดตทั้งแถว daily และ weekly: อัตราใช้ต่อวัน = pred (daily) หรือ pred/7 (weekly)
   await pool.query(
     `UPDATE forecasts
-     SET days_of_supply = ROUND((stock_on_hand / GREATEST(pred_next_day, 0.1))::numeric, 1),
+     SET days_of_supply = ROUND((stock_on_hand /
+           GREATEST(pred_next_day / (CASE WHEN freq='weekly' THEN 7.0 ELSE 1.0 END), 0.1))::numeric, 1),
          status = CASE
-           WHEN stock_on_hand / GREATEST(pred_next_day, 0.1) >= 14 THEN 'green'
-           WHEN stock_on_hand / GREATEST(pred_next_day, 0.1) >= 4  THEN 'yellow'
+           WHEN stock_on_hand / GREATEST(pred_next_day / (CASE WHEN freq='weekly' THEN 7.0 ELSE 1.0 END), 0.1) >= 14 THEN 'green'
+           WHEN stock_on_hand / GREATEST(pred_next_day / (CASE WHEN freq='weekly' THEN 7.0 ELSE 1.0 END), 0.1) >= 4  THEN 'yellow'
            ELSE 'red' END
      WHERE hospital_id = $1 AND drug = $2`,
     [hospitalId, drug]);
@@ -43,11 +92,12 @@ async function recomputeForecast(hospitalId, drug) {
 // บันทึก Audit Trail (timestamp + IP + ตำแหน่ง) — best-effort ไม่ให้ล้มทั้ง request
 async function logAudit(req, action, entity, entityId, detail) {
   try {
+    const loc = await ipLocation(req.ip);
     await pool.query(
       `INSERT INTO audit_log (actor, action, entity, entity_id, detail, ip, ip_location)
        VALUES ($1,$2,$3,$4,$5,$6,$7)`,
       [req.user?.hospital_id || null, action, entity, entityId != null ? String(entityId) : null,
-       detail || null, req.ip, ipLocation(req.ip)]
+       detail || null, req.ip, loc]
     );
   } catch (e) {
     console.error("[audit] failed:", e.message);
@@ -84,8 +134,9 @@ app.get("/api/health", async (_req, res) => {
 app.get("/api/hospitals", requireAuth, async (req, res, next) => {
   try {
     const scope = scopedHospital(req);
-    const params = scope ? [scope] : [];
-    const where = scope ? "WHERE h.hospital_id = $1" : "";
+    const params = [freqOf(req)];
+    let where = "";
+    if (scope) { params.push(scope); where = `WHERE h.hospital_id = $${params.length}`; }
     const { rows } = await pool.query(`
       SELECT h.hospital_id, h.name, h.latitude, h.longitude, h.lead_time_days,
              COUNT(*) FILTER (WHERE f.status='red')    AS n_red,
@@ -95,7 +146,7 @@ app.get("/api/hospitals", requireAuth, async (req, res, next) => {
                   WHEN COUNT(*) FILTER (WHERE f.status='yellow')>0 THEN 'yellow'
                   ELSE 'green' END                     AS worst_status
       FROM hospitals h
-      LEFT JOIN forecasts f ON f.hospital_id = h.hospital_id
+      LEFT JOIN forecasts f ON f.hospital_id = h.hospital_id AND f.freq = $1
       ${where}
       GROUP BY h.hospital_id
       ORDER BY h.hospital_id`, params);
@@ -108,11 +159,11 @@ app.get("/api/forecasts", requireAuth, async (req, res, next) => {
   try {
     const { status } = req.query;
     const scope = scopedHospital(req);  // hospital role -> บังคับ รพ.ตัวเอง
-    const where = [];
-    const params = [];
+    const params = [freqOf(req)];
+    const where = ["freq=$1"];
     if (scope) { params.push(scope); where.push(`hospital_id=$${params.length}`); }
     if (status) { params.push(status); where.push(`status=$${params.length}`); }
-    const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const clause = `WHERE ${where.join(" AND ")}`;
     const { rows } = await pool.query(
       `SELECT hospital_id, drug, desc_th, last_date, pred_next_day, stock_on_hand,
               reorder_point, expiry_date, days_of_supply, status, confidence
@@ -126,18 +177,19 @@ app.get("/api/forecasts", requireAuth, async (req, res, next) => {
 app.get("/api/summary", requireAuth, async (req, res, next) => {
   try {
     const scope = scopedHospital(req);
-    const params = scope ? [scope] : [];
-    const where = scope ? "WHERE hospital_id = $1" : "";
-    const hospWhere = scope ? "WHERE hospital_id = $1" : "";
-    const { rows } = await pool.query(`
-      SELECT
-        (SELECT COUNT(*) FROM hospitals ${hospWhere}) AS hospitals,
-        COUNT(*) FILTER (WHERE status='red')    AS red_items,
-        COUNT(*) FILTER (WHERE status='yellow') AS yellow_items,
-        COUNT(*) FILTER (WHERE status='green')  AS green_items,
-        ROUND(AVG(confidence)::numeric, 3)      AS avg_confidence
-      FROM forecasts ${where}`, params);
-    res.json(rows[0]);
+    const fParams = [freqOf(req)];
+    let fWhere = "WHERE freq=$1";
+    if (scope) { fParams.push(scope); fWhere += ` AND hospital_id=$${fParams.length}`; }
+    const hCount = await pool.query(
+      `SELECT COUNT(*) AS c FROM hospitals ${scope ? "WHERE hospital_id=$1" : ""}`,
+      scope ? [scope] : []);
+    const agg = await pool.query(`
+      SELECT COUNT(*) FILTER (WHERE status='red')    AS red_items,
+             COUNT(*) FILTER (WHERE status='yellow') AS yellow_items,
+             COUNT(*) FILTER (WHERE status='green')  AS green_items,
+             ROUND(AVG(confidence)::numeric, 3)      AS avg_confidence
+      FROM forecasts ${fWhere}`, fParams);
+    res.json({ hospitals: hCount.rows[0].c, ...agg.rows[0] });
   } catch (e) { next(e); }
 });
 
@@ -145,8 +197,9 @@ app.get("/api/summary", requireAuth, async (req, res, next) => {
 app.get("/api/drugs", requireAuth, async (req, res, next) => {
   try {
     const scope = scopedHospital(req);
-    const params = scope ? [scope] : [];
-    const where = scope ? "WHERE hospital_id = $1" : "";
+    const params = [freqOf(req)];
+    let where = "WHERE freq=$1";
+    if (scope) { params.push(scope); where += ` AND hospital_id=$${params.length}`; }
     const { rows } = await pool.query(`
       SELECT drug,
              MAX(desc_th)                                AS desc_th,
@@ -222,6 +275,11 @@ function scopedHospital(req) {
   return req.user.hospital_id;
 }
 
+// granularity ที่เลือก: daily (default) | weekly
+function freqOf(req) {
+  return req.query.freq === "weekly" ? "weekly" : "daily";
+}
+
 // ---------- BORROW (ยืมยา) ----------
 // รพ. ที่ให้ยืมยา drug ได้ = สถานะ 🟢 (เหลือ ≥14 วัน) — เรียงตามระยะทาง GPS ใกล้สุด (Smart Borrowing)
 app.get("/api/lenders", requireAuth, async (req, res, next) => {
@@ -238,7 +296,7 @@ app.get("/api/lenders", requireAuth, async (req, res, next) => {
                 sin(radians(me.lat)) * sin(radians(h.latitude))))))::numeric, 1) AS distance_km
        FROM forecasts f
        JOIN hospitals h ON h.hospital_id = f.hospital_id, me
-       WHERE f.drug = $1 AND f.status = 'green' AND f.hospital_id <> $2
+       WHERE f.drug = $1 AND f.freq = 'daily' AND f.status = 'green' AND f.hospital_id <> $2
        ORDER BY distance_km ASC`,
       [drug, req.user.hospital_id]);
     res.json(rows);
@@ -256,14 +314,14 @@ app.post("/api/borrow", requireAuth, async (req, res, next) => {
     if (to_hospital === from) return res.status(400).json({ error: "ยืมจากโรงพยาบาลตัวเองไม่ได้" });
 
     const chk = await pool.query(
-      "SELECT status FROM forecasts WHERE hospital_id=$1 AND drug=$2", [from, drug]);
+      "SELECT status FROM forecasts WHERE hospital_id=$1 AND drug=$2 AND freq='daily'", [from, drug]);
     if (!chk.rows[0]) return res.status(400).json({ error: "ไม่พบยานี้ในระบบของโรงพยาบาล" });
     if (chk.rows[0].status !== "red") {
       return res.status(403).json({ error: "ยืมยาได้เฉพาะรายการที่สถานะ 🔴 ขาดแคลนเท่านั้น" });
     }
     // ผู้ให้ยืมต้องมียาตัวนี้สถานะ 🟢 (โซนปลอดภัย ≥14 วัน)
     const lend = await pool.query(
-      "SELECT status FROM forecasts WHERE hospital_id=$1 AND drug=$2", [to_hospital, drug]);
+      "SELECT status FROM forecasts WHERE hospital_id=$1 AND drug=$2 AND freq='daily'", [to_hospital, drug]);
     if (!lend.rows[0] || lend.rows[0].status !== "green") {
       return res.status(403).json({ error: "โรงพยาบาลผู้ให้ยืมต้องมียานี้สถานะ 🟢 (เหลือ ≥14 วัน)" });
     }
@@ -282,7 +340,8 @@ app.post("/api/borrow", requireAuth, async (req, res, next) => {
 app.get("/api/borrow", requireAuth, async (req, res, next) => {
   try {
     const me = req.user.hospital_id;
-    const baseSelect = `SELECT b.*, hf.name AS from_name, ht.name AS to_name
+    const baseSelect = `SELECT b.*, hf.name AS from_name, ht.name AS to_name,
+         EXISTS(SELECT 1 FROM borrow_documents d WHERE d.borrow_id = b.id) AS has_signed_doc
        FROM borrow_requests b
        LEFT JOIN hospitals hf ON hf.hospital_id = b.from_hospital
        LEFT JOIN hospitals ht ON ht.hospital_id = b.to_hospital`;
@@ -335,6 +394,50 @@ app.patch("/api/borrow/:id", requireAuth, async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// ---------- เอกสารที่เซ็นแล้ว (อัปโหลด/ดาวน์โหลด) ----------
+function canAccessBorrow(req, b) {
+  const me = req.user.hospital_id;
+  return req.user.role === "admin" || me === b.from_hospital || me === b.to_hospital;
+}
+
+// อัปโหลดเอกสารที่เซ็นแล้ว (base64) แนบกับคำขอยืม
+app.post("/api/borrow/:id/document", requireAuth, async (req, res, next) => {
+  try {
+    const { filename, mime, data } = req.body || {};
+    if (!data) return res.status(400).json({ error: "ไม่มีไฟล์" });
+    const cur = await pool.query(
+      "SELECT id, from_hospital, to_hospital FROM borrow_requests WHERE id=$1", [req.params.id]);
+    if (!cur.rows[0]) return res.status(404).json({ error: "ไม่พบคำขอ" });
+    if (!canAccessBorrow(req, cur.rows[0])) return res.status(403).json({ error: "ไม่มีสิทธิ์" });
+    await pool.query(
+      `INSERT INTO borrow_documents (borrow_id, filename, mime, data_b64, uploaded_by)
+       VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (borrow_id) DO UPDATE SET
+         filename=EXCLUDED.filename, mime=EXCLUDED.mime, data_b64=EXCLUDED.data_b64,
+         uploaded_by=EXCLUDED.uploaded_by, uploaded_at=now()`,
+      [req.params.id, filename || "signed", mime || "application/octet-stream",
+       data, req.user.hospital_id || "admin"]);
+    await logAudit(req, "upload_signed", "borrow_request", req.params.id,
+                   `อัปโหลดเอกสารที่เซ็นแล้ว (คำขอ #${req.params.id})`);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ดาวน์โหลดเอกสารที่เซ็นแล้ว
+app.get("/api/borrow/:id/document", requireAuth, async (req, res, next) => {
+  try {
+    const cur = await pool.query(
+      "SELECT from_hospital, to_hospital FROM borrow_requests WHERE id=$1", [req.params.id]);
+    if (!cur.rows[0]) return res.status(404).json({ error: "ไม่พบคำขอ" });
+    if (!canAccessBorrow(req, cur.rows[0])) return res.status(403).json({ error: "ไม่มีสิทธิ์" });
+    const doc = await pool.query(
+      "SELECT filename, mime, data_b64, uploaded_at FROM borrow_documents WHERE borrow_id=$1",
+      [req.params.id]);
+    if (!doc.rows[0]) return res.status(404).json({ error: "ยังไม่มีเอกสารที่เซ็น" });
+    res.json(doc.rows[0]);
+  } catch (e) { next(e); }
+});
+
 // ---------- AUDIT TRAIL ----------
 // บันทึกธุรกรรมล่าสุด (timestamp + IP) — โปร่งใส ตรวจสอบได้
 app.get("/api/audit", requireAuth, requireAdmin, async (req, res, next) => {
@@ -354,30 +457,31 @@ app.get("/api/alerts", requireAuth, async (req, res, next) => {
   try {
     const scope = scopedHospital(req);   // admin -> null = ทุก รพ.
     const expiryDays = parseInt(req.query.expiry_days || "120", 10);
-    const hf = scope ? "hospital_id = $1 AND" : "";          // hospital filter (optional)
-    const hp = scope ? [scope] : [];
+    const base = [freqOf(req)];          // freq filter (อย่างน้อยเสมอ)
+    let cond = "freq=$1";
+    if (scope) { base.push(scope); cond += ` AND hospital_id=$${base.length}`; }
 
     // FEFO: ใกล้หมดอายุก่อน (รวมที่หมดอายุแล้ว) — เรียงตามวันหมดอายุ
     const expiring = await pool.query(
       `SELECT hospital_id, drug, desc_th, stock_on_hand, expiry_date,
               (expiry_date - CURRENT_DATE) AS days_to_expiry
        FROM forecasts
-       WHERE ${hf} expiry_date IS NOT NULL
-         AND (expiry_date - CURRENT_DATE) <= $${hp.length + 1}
-       ORDER BY expiry_date ASC`, [...hp, expiryDays]);
+       WHERE ${cond} AND expiry_date IS NOT NULL
+         AND (expiry_date - CURRENT_DATE) <= $${base.length + 1}
+       ORDER BY expiry_date ASC`, [...base, expiryDays]);
 
     // ต่ำกว่าจุดสั่งซื้อ (reorder point)
     const reorder = await pool.query(
       `SELECT hospital_id, drug, desc_th, stock_on_hand, reorder_point, days_of_supply, status
        FROM forecasts
-       WHERE ${hf} stock_on_hand <= reorder_point
-       ORDER BY (stock_on_hand - reorder_point) ASC`, hp);
+       WHERE ${cond} AND stock_on_hand <= reorder_point
+       ORDER BY (stock_on_hand - reorder_point) ASC`, base);
 
     // ขาดแคลน (สถานะแดง)
     const shortage = await pool.query(
       `SELECT hospital_id, drug, desc_th, stock_on_hand, days_of_supply, status
-       FROM forecasts WHERE ${hf} status = 'red'
-       ORDER BY days_of_supply ASC`, hp);
+       FROM forecasts WHERE ${cond} AND status = 'red'
+       ORDER BY days_of_supply ASC`, base);
 
     res.json({
       expiring: expiring.rows,

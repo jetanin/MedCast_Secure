@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS hospitals (
 
 CREATE TABLE IF NOT EXISTS forecasts (
     id              SERIAL PRIMARY KEY,
+    freq            TEXT NOT NULL DEFAULT 'daily',   -- 'daily' | 'weekly'
     hospital_id     TEXT REFERENCES hospitals(hospital_id),
     drug            TEXT NOT NULL,
     desc_th         TEXT,
@@ -23,7 +24,7 @@ CREATE TABLE IF NOT EXISTS forecasts (
     days_of_supply  DOUBLE PRECISION,   -- จำนวนวันที่ยาเหลือ = stock / pred
     status          TEXT CHECK (status IN ('green', 'yellow', 'red')),
     confidence      DOUBLE PRECISION,
-    UNIQUE (hospital_id, drug)
+    UNIQUE (hospital_id, drug, freq)
 );
 
 CREATE TABLE IF NOT EXISTS weights (
@@ -60,6 +61,16 @@ CREATE TABLE IF NOT EXISTS borrow_requests (
 
 CREATE INDEX IF NOT EXISTS idx_borrow_from ON borrow_requests(from_hospital);
 CREATE INDEX IF NOT EXISTS idx_borrow_to ON borrow_requests(to_hospital);
+
+-- เอกสารที่เซ็นแล้ว (อัปโหลดกลับ) — 1 ไฟล์ต่อคำขอ เก็บแยกตารางไม่ให้ list ช้า
+CREATE TABLE IF NOT EXISTS borrow_documents (
+    borrow_id    INTEGER PRIMARY KEY REFERENCES borrow_requests(id),
+    filename     TEXT,
+    mime         TEXT,
+    data_b64     TEXT,         -- เนื้อไฟล์ (base64)
+    uploaded_by  TEXT,
+    uploaded_at  TIMESTAMPTZ DEFAULT now()
+);
 
 -- Audit Trail: บันทึกทุกธุรกรรมแบบแก้ย้อนหลังไม่ได้ (timestamp + IP) ตามมาตรฐาน e-Document
 CREATE TABLE IF NOT EXISTS audit_log (

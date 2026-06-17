@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { api, auth } from "../api";
 import BorrowMemo from "./BorrowMemo.jsx";
+import Regulations from "./Regulations.jsx";
+import Pagination, { usePaged } from "./Pagination.jsx";
 
 const STATUS_TH = {
   pending: "⏳ รออนุมัติ", approved: "✅ อนุมัติแล้ว", rejected: "❌ ปฏิเสธ",
@@ -18,6 +20,8 @@ export default function Borrow() {
   const [requests, setRequests] = useState([]);
   const [msg, setMsg] = useState(null);
   const [memoFor, setMemoFor] = useState(null); // คำขอที่กำลังเปิดเอกสาร
+  const [showRules, setShowRules] = useState(false);
+  const pagedReq = usePaged(requests, 15);
 
   function refresh() {
     api.listBorrow().then(setRequests).catch((e) => setMsg(e.message));
@@ -57,6 +61,11 @@ export default function Borrow() {
   }
 
   return (
+    <>
+    <div className="panel" style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
+      <button className="tab" onClick={() => setShowRules(true)}>📜 ระเบียบปฏิบัติ การยืม - คืน ยา / เวชภัณฑ์</button>
+      <span className="muted">อ่านระเบียบก่อนทำรายการยืม-คืน</span>
+    </div>
     <div className="row">
       {/* ---- ฟอร์มยืมยา (เฉพาะผู้ใช้ระดับโรงพยาบาล) ---- */}
       {!isAdmin && (
@@ -104,7 +113,7 @@ export default function Borrow() {
             <tr><th>ทิศทาง</th><th>ยา</th><th>จำนวน</th><th>คู่ (ขอ → ให้)</th><th>สถานะ</th><th></th></tr>
           </thead>
           <tbody>
-            {requests.map((r) => (
+            {pagedReq.slice.map((r) => (
               <tr key={r.id}>
                 <td>{r.direction === "outgoing" ? "📤 ขอยืม" : r.direction === "incoming" ? "📥 ถูกขอ" : "📋 ภาพรวม"}</td>
                 <td>{r.drug}</td>
@@ -131,9 +140,12 @@ export default function Borrow() {
             )}
           </tbody>
         </table>
+        <Pagination {...pagedReq} />
       </div>
 
       {memoFor && <BorrowMemo request={memoFor} onClose={() => setMemoFor(null)} />}
     </div>
+    {showRules && <Regulations onClose={() => setShowRules(false)} />}
+    </>
   );
 }

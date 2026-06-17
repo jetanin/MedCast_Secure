@@ -29,13 +29,20 @@ async function req(path, options = {}) {
   return res.json();
 }
 
+// granularity ที่ผู้ใช้เลือก (daily | weekly) — เก็บใน localStorage
+export const prefs = {
+  get freq() { return localStorage.getItem("medcast_freq") || "daily"; },
+  set freq(v) { localStorage.setItem("medcast_freq", v); },
+};
+const fq = () => `freq=${prefs.freq}`;
+
 export const api = {
-  // public-ish
-  summary: () => req("/summary"),
-  hospitals: () => req("/hospitals"),
-  drugs: () => req("/drugs"),
+  // public-ish (ขึ้นกับ freq ที่เลือก)
+  summary: () => req(`/summary?${fq()}`),
+  hospitals: () => req(`/hospitals?${fq()}`),
+  drugs: () => req(`/drugs?${fq()}`),
   forecasts: (hospitalId, status) =>
-    req(`/forecasts?${hospitalId ? `hospital_id=${hospitalId}&` : ""}${status ? `status=${status}` : ""}`),
+    req(`/forecasts?${fq()}${hospitalId ? `&hospital_id=${hospitalId}` : ""}${status ? `&status=${status}` : ""}`),
   privacy: () => req("/privacy"),
   // auth
   login: (username, password) =>
@@ -46,7 +53,10 @@ export const api = {
   listBorrow: () => req("/borrow"),
   actBorrow: (id, status) =>
     req(`/borrow/${id}`, { method: "PATCH", body: JSON.stringify({ status }) }),
+  uploadBorrowDoc: (id, payload) =>
+    req(`/borrow/${id}/document`, { method: "POST", body: JSON.stringify(payload) }),
+  getBorrowDoc: (id) => req(`/borrow/${id}/document`),
   // alerts + audit
-  alerts: () => req("/alerts"),
+  alerts: () => req(`/alerts?${fq()}`),
   audit: () => req("/audit"),
 };

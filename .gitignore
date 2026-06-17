@@ -20,6 +20,9 @@ venv/
 env/
 .pytest_cache/
 
+# ===== MaxMind GeoLite2 DB (ต้องมี license — โหลดเอง ไม่ commit) =====
+*.mmdb
+
 # ===== Node / Frontend =====
 node_modules/
 dist/

@@ -43,8 +43,9 @@ def feature_columns(sample: pd.DataFrame):
     return num + dummies
 
 
-def federated_retrain(dp_sigma=DP_SIGMA, seed=0):
-    feats = {fp.stem: build_features(pd.read_csv(fp)) for fp in list_hospital_files()}
+def federated_retrain(freq="D", dp_sigma=DP_SIGMA, seed=0):
+    suf = "" if freq == "D" else f"_{freq}"
+    feats = {fp.stem: build_features(pd.read_csv(fp), freq=freq) for fp in list_hospital_files()}
     if not feats:
         raise SystemExit("ไม่พบข้อมูลโรงพยาบาลใน data/hospitals/")
     FEATURES = feature_columns(next(iter(feats.values())))
@@ -69,31 +70,37 @@ def federated_retrain(dp_sigma=DP_SIGMA, seed=0):
     intercept = np.average(intercepts, axis=0, weights=w)
 
     joblib.dump({"coef": coef, "intercept": intercept, "scaler": scaler, "features": FEATURES},
-                MODELS / "fedavg_dp_demand.joblib")
+                MODELS / f"fedavg_dp_demand{suf}.joblib")
     gw = pd.DataFrame({"feature": FEATURES, "weight": np.round(coef, 6)})
     gw = pd.concat([gw, pd.DataFrame([{"feature": "__bias__", "weight": round(float(intercept[0]), 6)}])],
                    ignore_index=True)
-    gw.to_csv(MODELS / "global_weights.csv", index=False, encoding="utf-8-sig")
+    gw.to_csv(MODELS / f"global_weights{suf}.csv", index=False, encoding="utf-8-sig")
 
-    # โมเดลความแม่น (RandomForest) สำหรับคำนวณ confidence — แม่นกว่าเชิงเส้น (ข้อ 3)
+    # โมเดลความแม่น (RandomForest) สำหรับคำนวณ confidence
     rf = RandomForestRegressor(
         n_estimators=200, max_depth=14, min_samples_leaf=5, n_jobs=-1, random_state=42
     ).fit(pooled[FEATURES], pooled["demand"])
-    joblib.dump({"model": rf, "features": FEATURES}, MODELS / "accuracy_model.joblib")
+    joblib.dump({"model": rf, "features": FEATURES}, MODELS / f"accuracy_model{suf}.joblib")
 
     return len(feats), len(FEATURES)
 
 
 def refresh_snapshot():
-    fc, _ = forecast_all()  # โหลด weight กลางใหม่ + stock ปัจจุบัน
+    """รวม snapshot ทั้งรายวัน (daily) และรายสัปดาห์ (weekly) ไว้ในไฟล์เดียว (มีคอลัมน์ freq)."""
     atc = load_atc_names()
-    fc["desc_th"] = fc["drug"].map(atc).fillna("")
-    cols = ["hospital_id", "drug", "desc_th", "last_date", "pred_next_day",
+    parts = []
+    for freq, label in [("D", "daily"), ("W", "weekly")]:
+        fc, _ = forecast_all(freq)
+        fc["freq"] = label
+        fc["desc_th"] = fc["drug"].map(atc).fillna("")
+        parts.append(fc)
+    allfc = pd.concat(parts, ignore_index=True)
+    cols = ["freq", "hospital_id", "drug", "desc_th", "last_date", "pred_next_day",
             "stock_on_hand", "reorder_point", "expiry_date", "days_of_supply",
             "status", "confidence"]
     PRED.mkdir(parents=True, exist_ok=True)
-    fc[cols].to_csv(PRED / "forecast_snapshot.csv", index=False, encoding="utf-8-sig")
-    return len(fc)
+    allfc[cols].to_csv(PRED / "forecast_snapshot.csv", index=False, encoding="utf-8-sig")
+    return len(allfc)
 
 
 def trigger_reseed():
@@ -114,9 +121,11 @@ def trigger_reseed():
 
 
 def main():
-    n_hosp, n_feat = federated_retrain()
+    for freq, label in [("D", "รายวัน"), ("W", "รายสัปดาห์")]:
+        n_hosp, n_feat = federated_retrain(freq)
+        print(f"[retrain] FedAvg {label} ({freq}): {n_hosp} รพ. · {n_feat} ฟีเจอร์")
     n_rows = refresh_snapshot()
-    print(f"[retrain] FedAvg เสร็จ: {n_hosp} รพ. · {n_feat} ฟีเจอร์ · snapshot {n_rows} แถว")
+    print(f"[retrain] snapshot รวม {n_rows} แถว (daily + weekly)")
     trigger_reseed()
 
 

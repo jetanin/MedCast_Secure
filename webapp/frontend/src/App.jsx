@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, auth } from "./api";
+import { api, auth, prefs } from "./api";
 import Login from "./components/Login.jsx";
 import OverviewMap from "./components/OverviewMap.jsx";
 import AIIntelligence from "./components/AIIntelligence.jsx";
@@ -23,6 +23,7 @@ const ALL_TABS = [
 export default function App() {
   const [authed, setAuthed] = useState(!!auth.token);
   const [tab, setTab] = useState("map");
+  const [freq, setFreqState] = useState(prefs.freq);  // 'daily' | 'weekly'
   const [summary, setSummary] = useState(null);
   const [hospitals, setHospitals] = useState([]);
   const [error, setError] = useState(null);
@@ -35,7 +36,13 @@ export default function App() {
         if (e.status === 401) { auth.logout(); setAuthed(false); }
         else setError(e.message);
       });
-  }, [authed]);
+  }, [authed, freq]);
+
+  function changeFreq(v) {
+    prefs.freq = v;       // ให้ api อ่านค่าใหม่
+    setSummary(null);     // โหลดใหม่
+    setFreqState(v);
+  }
 
   if (!authed) return <Login onLogin={() => setAuthed(true)} />;
   if (error) return <div className="app"><h1 className="title">⚠️ {error}</h1></div>;
@@ -68,21 +75,30 @@ export default function App() {
         <div className="kpi"><div className="label">Confidence เฉลี่ย</div><div className="value">{Math.round(summary.avg_confidence * 100)}%</div></div>
       </div>
 
-      <div className="tabs">
-        {TABS.map((t) => (
-          <button key={t.id} className={`tab ${activeTab === t.id ? "active" : ""}`} onClick={() => setTab(t.id)}>
-            {t.label}
-          </button>
-        ))}
+      <div className="tabbar">
+        <div className="tabs">
+          {TABS.map((t) => (
+            <button key={t.id} className={`tab ${activeTab === t.id ? "active" : ""}`} onClick={() => setTab(t.id)}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <div className="freq-toggle" title="ความถี่การพยากรณ์">
+          <button className={freq === "daily" ? "active" : ""} onClick={() => changeFreq("daily")}>รายวัน</button>
+          <button className={freq === "weekly" ? "active" : ""} onClick={() => changeFreq("weekly")}>รายสัปดาห์</button>
+        </div>
       </div>
 
-      {activeTab === "map" && <OverviewMap hospitals={hospitals} />}
-      {activeTab === "ai" && <AIIntelligence hospitals={hospitals} />}
-      {activeTab === "drugs" && <Drugs />}
-      {activeTab === "alerts" && <Alerts />}
-      {activeTab === "borrow" && <Borrow />}
-      {activeTab === "audit" && <AuditTrail />}
-      {activeTab === "privacy" && <PrivacyPanel />}
+      {/* key={freq} -> remount เมื่อสลับ granularity เพื่อโหลดข้อมูลใหม่ */}
+      <div key={`${activeTab}-${freq}`}>
+        {activeTab === "map" && <OverviewMap hospitals={hospitals} />}
+        {activeTab === "ai" && <AIIntelligence hospitals={hospitals} freq={freq} />}
+        {activeTab === "drugs" && <Drugs />}
+        {activeTab === "alerts" && <Alerts />}
+        {activeTab === "borrow" && <Borrow />}
+        {activeTab === "audit" && <AuditTrail />}
+        {activeTab === "privacy" && <PrivacyPanel />}
+      </div>
 
       <p className="subtitle" style={{ marginTop: 16 }}>MedCast_Secure · Logistics Innovation Hackathon 2026</p>
     </div>

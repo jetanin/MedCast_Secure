@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import Pagination, { usePaged } from "./Pagination.jsx";
 
 const ACTION_TH = {
   login: "🔑 เข้าสู่ระบบ",
@@ -7,12 +8,14 @@ const ACTION_TH = {
   approve_borrow: "✅ อนุมัติ",
   reject_borrow: "❌ ปฏิเสธ",
   retrain_forecast: "🔄 อัปเดตพยากรณ์อัตโนมัติ",
+  upload_signed: "⬆️ อัปโหลดเอกสารเซ็นแล้ว",
 };
 
 export default function AuditTrail() {
   const [rows, setRows] = useState([]);
   const [err, setErr] = useState(null);
 
+  const paged = usePaged(rows, 20);
   useEffect(() => { api.audit().then(setRows).catch((e) => setErr(e.message)); }, []);
   if (err) return <div className="panel muted">⚠️ {err}</div>;
 
@@ -27,7 +30,7 @@ export default function AuditTrail() {
           <tr><th>เวลา</th><th>ผู้ทำรายการ</th><th>การกระทำ</th><th>รายละเอียด</th><th>IP</th><th>ตำแหน่ง</th></tr>
         </thead>
         <tbody>
-          {rows.map((r) => (
+          {paged.slice.map((r) => (
             <tr key={r.id}>
               <td className="muted">{new Date(r.ts).toLocaleString("th-TH")}</td>
               <td>{r.actor_name || r.actor || "-"}</td>
@@ -40,6 +43,7 @@ export default function AuditTrail() {
           {rows.length === 0 && <tr><td colSpan="6" className="muted">ยังไม่มีบันทึก</td></tr>}
         </tbody>
       </table>
+      <Pagination {...paged} />
     </div>
   );
 }

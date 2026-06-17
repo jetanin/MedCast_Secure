@@ -29,10 +29,11 @@ async function ensureSchema() {
       hospital_id TEXT PRIMARY KEY, name TEXT NOT NULL,
       latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, lead_time_days INTEGER);
     CREATE TABLE IF NOT EXISTS forecasts (
-      id SERIAL PRIMARY KEY, hospital_id TEXT, drug TEXT NOT NULL, desc_th TEXT,
-      last_date DATE, pred_next_day DOUBLE PRECISION, stock_on_hand DOUBLE PRECISION,
+      id SERIAL PRIMARY KEY, freq TEXT NOT NULL DEFAULT 'daily', hospital_id TEXT, drug TEXT NOT NULL,
+      desc_th TEXT, last_date DATE, pred_next_day DOUBLE PRECISION, stock_on_hand DOUBLE PRECISION,
       reorder_point DOUBLE PRECISION, expiry_date DATE, days_of_supply DOUBLE PRECISION,
-      status TEXT, confidence DOUBLE PRECISION, UNIQUE (hospital_id, drug));
+      status TEXT, confidence DOUBLE PRECISION, UNIQUE (hospital_id, drug, freq));
+    ALTER TABLE forecasts ADD COLUMN IF NOT EXISTS freq TEXT NOT NULL DEFAULT 'daily';
     CREATE TABLE IF NOT EXISTS weights (feature TEXT PRIMARY KEY, weight DOUBLE PRECISION);
     CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL,
@@ -46,6 +47,9 @@ async function ensureSchema() {
       id SERIAL PRIMARY KEY, ts TIMESTAMPTZ NOT NULL DEFAULT now(), actor TEXT,
       action TEXT NOT NULL, entity TEXT, entity_id TEXT, detail TEXT, ip TEXT, ip_location TEXT);
     ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS ip_location TEXT;
+    CREATE TABLE IF NOT EXISTS borrow_documents (
+      borrow_id INTEGER PRIMARY KEY, filename TEXT, mime TEXT, data_b64 TEXT,
+      uploaded_by TEXT, uploaded_at TIMESTAMPTZ DEFAULT now());
   `);
 }
 
@@ -88,16 +92,16 @@ async function seed() {
   for (const f of forecasts) {
     await pool.query(
       `INSERT INTO forecasts
-         (hospital_id, drug, desc_th, last_date, pred_next_day, stock_on_hand,
+         (freq, hospital_id, drug, desc_th, last_date, pred_next_day, stock_on_hand,
           reorder_point, expiry_date, days_of_supply, status, confidence)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-       ON CONFLICT (hospital_id, drug) DO UPDATE SET
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       ON CONFLICT (hospital_id, drug, freq) DO UPDATE SET
          desc_th=EXCLUDED.desc_th, last_date=EXCLUDED.last_date,
          pred_next_day=EXCLUDED.pred_next_day, stock_on_hand=EXCLUDED.stock_on_hand,
          reorder_point=EXCLUDED.reorder_point, expiry_date=EXCLUDED.expiry_date,
          days_of_supply=EXCLUDED.days_of_supply, status=EXCLUDED.status,
          confidence=EXCLUDED.confidence`,
-      [f.hospital_id, f.drug, f.desc_th, f.last_date || null,
+      [f.freq || "daily", f.hospital_id, f.drug, f.desc_th, f.last_date || null,
        parseFloat(f.pred_next_day), parseFloat(f.stock_on_hand),
        parseFloat(f.reorder_point), f.expiry_date || null,
        parseFloat(f.days_of_supply), f.status, parseFloat(f.confidence)]

@@ -35,10 +35,13 @@ services:
       SEED_DIR: /seed
       PORT: 4000
       RESEED_TOKEN: medcast-reseed   # token ภายในสำหรับ retrainer เรียก /api/reseed
+      IP_GEO: maxmind                # maxmind (offline) | ipapi (online ระดับเขต)
+      GEOIP_DB: /geoip/GeoLite2-City.mmdb
     volumes:
       # mount ข้อมูล + weight (read-only) ให้ backend seed ลง Postgres
       - ../data:/seed/data:ro
       - ../models:/seed/models:ro
+      - ./geoip:/geoip:ro            # วางไฟล์ GeoLite2-City.mmdb ไว้ที่ webapp/geoip/
     depends_on:
       db:
         condition: service_healthy

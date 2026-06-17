@@ -24,10 +24,13 @@ TH_HOLIDAYS = {
 }
 
 
-def build_features(usage: pd.DataFrame) -> pd.DataFrame:
-    """สร้างฟีเจอร์จากข้อมูลดิบ drug_usage (date, drug_id, quantity_dispensed, hospital_id)."""
+def build_features(usage: pd.DataFrame, freq: str = "D") -> pd.DataFrame:
+    """สร้างฟีเจอร์จากข้อมูลดิบ drug_usage. freq='D' รายวัน · 'W' รายสัปดาห์ (รวมยอดต่อสัปดาห์)."""
     g = usage.rename(columns={"quantity_dispensed": "demand", "drug_id": "drug"}).copy()
     g["datum"] = pd.to_datetime(g["date"])
+    if freq == "W":
+        # รวมยอดเป็นรายสัปดาห์ (noise ต่ำลง -> พยากรณ์แม่นขึ้น)
+        g = (g.set_index("datum").groupby("drug")["demand"].resample("W").sum().reset_index())
     g = g.sort_values(["drug", "datum"]).reset_index(drop=True)
     d = g["datum"].dt
     g["year"] = d.year; g["month"] = d.month; g["day"] = d.day; g["dayofweek"] = d.dayofweek
@@ -79,14 +82,22 @@ def status_from_days(days: float) -> str:
     return "red"
 
 
-def load_global_model():
-    """โหลด weight กลางจาก FedAvg + scaler + รายชื่อฟีเจอร์."""
-    return joblib.load(MODELS / "fedavg_dp_demand.joblib")
+def _suffix(freq):
+    return "" if freq == "D" else f"_{freq}"
 
 
-def load_accuracy_model():
-    """โหลดโมเดลความแม่น (RandomForest) สำหรับคำนวณ confidence — ถ้ามี."""
-    fp = MODELS / "accuracy_model.joblib"
+def fedavg_path(freq="D"):
+    return MODELS / f"fedavg_dp_demand{_suffix(freq)}.joblib"
+
+
+def load_global_model(freq="D"):
+    """โหลด weight กลางจาก FedAvg + scaler + รายชื่อฟีเจอร์ (ตาม granularity)."""
+    return joblib.load(fedavg_path(freq))
+
+
+def load_accuracy_model(freq="D"):
+    """โหลดโมเดลความแม่น (สำหรับ confidence) — ถ้ามี."""
+    fp = MODELS / f"accuracy_model{_suffix(freq)}.joblib"
     return joblib.load(fp) if fp.exists() else None
 
 
@@ -129,23 +140,24 @@ def list_hospital_files():
     return sorted(HOSP_DIR.glob("HOSP_*.csv"))
 
 
-def forecast_all():
-    """พยากรณ์วันถัดไปของทุก รพ./ทุกกลุ่มยา ด้วย weight กลาง.
+def forecast_all(freq="D"):
+    """พยากรณ์ช่วงถัดไปของทุก รพ./ทุกกลุ่มยา. freq='D' รายวัน · 'W' รายสัปดาห์.
 
-    คืน (forecast_df, history) :
-      forecast_df : 1 แถวต่อ (รพ., ยา) พร้อม pred, status, confidence, days_to_*
-      history     : ฟีเจอร์เต็ม (ไว้พล็อตกราฟย้อนหลัง)
+    คืน (forecast_df, history). freq='W' จะ noise ต่ำ -> confidence สูงขึ้น
+    days-of-supply ใช้อัตราใช้ต่อวัน = pred (รายวัน) หรือ pred/7 (รายสัปดาห์)
     """
-    bundle = load_global_model()
+    bundle = load_global_model(freq)
     coef, intercept = bundle["coef"], bundle["intercept"]
     scaler, FEATURES = bundle["scaler"], bundle["features"]
+    per_day = 1.0 if freq == "D" else 7.0          # 1 สัปดาห์ = 7 วัน
+    conf_k = 30 if freq == "D" else 12             # หน้าต่างวัด confidence (วัน/สัปดาห์)
 
     # คลังยาปัจจุบัน -> lookup (hospital_id, drug) : {stock, reorder, expiry}
     stock = load_stock()
     stock_map = {(r.hospital_id, r.drug): r for r in stock.itertuples(index=False)}
 
-    # ตัวพยากรณ์สำหรับคำนวณ confidence: ใช้ RandomForest (แม่นกว่า) ถ้ามี ไม่งั้น fallback linear
-    acc = load_accuracy_model()
+    # ตัวพยากรณ์สำหรับคำนวณ confidence: ใช้โมเดลความแม่น (ถ้ามี) ไม่งั้น fallback linear
+    acc = load_accuracy_model(freq)
     if acc is not None:
         conf_predict = lambda X: acc["model"].predict(X[acc["features"]])
     else:
@@ -154,18 +166,17 @@ def forecast_all():
     rows, history = [], {}
     for fp in list_hospital_files():
         hid = fp.stem
-        feats = build_features(pd.read_csv(fp))
+        feats = build_features(pd.read_csv(fp), freq=freq)
         history[hid] = feats
 
         latest = feats.sort_values("datum").groupby("drug").tail(1)
         X = scaler.transform(latest[FEATURES])
         pred = np.clip(X @ coef + intercept, 0, None)
 
-        # confidence score: อิงความแม่นจริงของโมเดลบน 30 วันล่าสุดของแต่ละยา
-        conf_map = accuracy_confidence(feats, conf_predict)
+        conf_map = accuracy_confidence(feats, conf_predict, k=conf_k)
 
         for i, (_, r) in enumerate(latest.iterrows()):
-            daily = max(float(pred[i]), 0.1)  # อัตราใช้ต่อวัน (กันหารศูนย์)
+            daily = max(float(pred[i]) / per_day, 0.1)  # อัตราใช้ต่อวัน (กันหารศูนย์)
             srow = stock_map.get((hid, r["drug"]))
             stock_on_hand = float(srow.stock_on_hand) if srow is not None else np.nan
             reorder_point = float(srow.reorder_point) if srow is not None else np.nan
